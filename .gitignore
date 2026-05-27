@@ -1,0 +1,10 @@
+# Configurazione con API key — mai caricare
+.env
+
+# Output degli scan — dati sensibili
+report/
+risultati_*.json
+
+# File Python compilati
+__pycache__/
+*.pyc
