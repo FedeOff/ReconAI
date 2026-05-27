@@ -2,7 +2,7 @@
 
 > Automated OSINT reconnaissance agent powered by AI — built for security professionals and pentest engagements.
 
-ReconAI automates the passive reconnaissance phase of a security assessment. Given a target domain, it enumerates subdomains, resolves IPs, scans for open ports, and produces a professional analysis report powered by an AI model of your choice.
+ReconAI automates the passive reconnaissance phase of a security assessment. Given a target domain, it enumerates subdomains, resolves IPs, scans for open ports, and delivers a professional AI-powered analysis report — directly to your Telegram.
 
 ---
 
@@ -15,6 +15,7 @@ ReconAI automates the passive reconnaissance phase of a security assessment. Giv
 - **AI-powered analysis** — passes all findings to an LLM for professional report generation
 - **Multi-provider AI** — supports Anthropic Claude, Google Gemini, Groq, and OpenAI
 - **Automatic fallback** — if the primary data source is unavailable, switches to backup automatically
+- **Telegram notifications** — receive scan summary and full AI analysis directly on Telegram
 - **Organized output** — each scan creates a timestamped folder with JSON data and AI analysis
 
 ---
@@ -27,15 +28,12 @@ python main.py target.com
          ├── Step 1 — Subdomain enumeration (crt.sh → HackerTarget fallback)
          ├── Step 2 — IP resolution & deduplication
          ├── Step 3 — Multi-threaded port scan + banner grabbing
-         └── Output → report/target.com_TIMESTAMP/
-                           ├── sottodomini.json
-                           ├── ip_map.json
-                           ├── port_scan.json
-                           └── report_completo.json
-
-python analyze.py
-         │
-         └── Reads latest report → sends to AI → analisi_gemini.txt
+         ├── Step 4 — AI analysis (auto, provider from .env)
+         └── Step 5 — Telegram notification
+                           │
+                           ├── Summary: subdomains, IPs, open ports
+                           ├── Interesting subdomains highlighted
+                           └── Button: download full AI analysis
 ```
 
 ---
@@ -65,35 +63,56 @@ nano .env
 Edit `.env` with your keys:
 
 ```env
-AI_PROVIDER=gemini          # anthropic | gemini | groq | openai
+# AI provider — choose one
+AI_PROVIDER=gemini
 
-GEMINI_API_KEY=your-key     # free — aistudio.google.com
-GROQ_API_KEY=your-key       # free — console.groq.com
-ANTHROPIC_API_KEY=your-key  # console.anthropic.com
-OPENAI_API_KEY=your-key     # platform.openai.com
-SHODAN_API_KEY=your-key     # shodan.io (free plan supported)
+# Free providers
+GEMINI_API_KEY=your-key        # aistudio.google.com
+GROQ_API_KEY=your-key          # console.groq.com
+
+# Paid providers
+ANTHROPIC_API_KEY=your-key     # console.anthropic.com
+OPENAI_API_KEY=your-key        # platform.openai.com
+
+# OSINT
+SHODAN_API_KEY=your-key        # shodan.io
+
+# Telegram notifications
+TELEGRAM_BOT_TOKEN=your-token  # @BotFather on Telegram
+TELEGRAM_CHAT_ID=your-chat-id  # @userinfobot on Telegram
 ```
 
-### 4. Run a scan
+### 4. Set up Telegram (optional)
+
+1. Open Telegram and search for `@BotFather`
+2. Send `/newbot` and follow the instructions
+3. Copy the token into `.env`
+4. Search `@userinfobot` to get your Chat ID
+5. Open a chat with your bot and send `/start`
+
+### 5. Run a scan
 
 ```bash
-# Basic scan
+# Full scan — subdomains + ports + AI analysis + Telegram
 python main.py target.com
 
-# Skip port scan (faster, subdomain enumeration only)
+# Skip port scan (faster)
 python main.py target.com --no-scan
 
-# Custom output folder
-python main.py target.com --output ./results
+# Skip Telegram notification
+python main.py target.com --no-telegram
+
+# Interactive mode (no arguments)
+python main.py
 ```
 
-### 5. Analyze with AI
+### 6. Run AI analysis manually
 
 ```bash
 # Auto-detects the latest report
 python analyze.py
 
-# Or specify a report manually
+# Specify a report
 python analyze.py report/target.com_20240527/report_completo.json
 ```
 
@@ -108,6 +127,7 @@ reconai/
 ├── osint_step1.py       # Subdomain enumeration module
 ├── shodan_module.py     # Shodan integration + IP resolution
 ├── scanner_module.py    # Multi-threaded port scanner
+├── telegram_module.py   # Telegram notifications
 ├── .env.example         # Configuration template
 └── README.md
 ```
@@ -120,28 +140,29 @@ reconai/
 ==================================================
          ReconAI v0.1
 ==================================================
-  Target  : tesla.com
-  Avvio   : 2024-05-27 14:30:22
-  Port scan: SI
+  Target    : tesla.com
+  Avvio     : 2024-05-27 14:30:22
+  Port scan : SI
+  Telegram  : SI
 ==================================================
 
-[*] Provo crt.sh (timeout 20s)...
-[+] crt.sh OK — 51 risultati
+STEP 1 — Subdomain enumeration
+[+] crt.sh OK — 51 results
 
-[*] Risoluzione IP dei sottodomini...
-[+] 51 sottodomini → 12 IP unici
+STEP 2 — IP resolution
+[+] 51 subdomains → 12 unique IPs
 
-[*] Avvio port scan...
-    [→] 1.2.3.4 (www.tesla.com, shop.tesla.com)
-        [+] 80/tcp   HTTP    HTTP/1.0 400 Bad Request
+STEP 3 — Port scan
+    [→] 1.2.3.4 (www.tesla.com)
+        [+] 80/tcp   HTTP
         [+] 443/tcp  HTTPS
 
-==================================================
-  SCAN COMPLETATO
-  Sottodomini trovati : 51
-  IP unici            : 12
-  IP con porte aperte : 8
-  Porte totali        : 17
+STEP 4 — AI analysis
+[+] Analysis saved: report/tesla.com_xxx/analisi_gemini.txt
+
+STEP 5 — Telegram notification
+[+] Summary sent — waiting for your choice...
+[+] Full analysis file sent
 ==================================================
 ```
 
@@ -149,12 +170,12 @@ reconai/
 
 ## AI Providers
 
-| Provider | Model | Cost | Speed |
+| Provider | Model | Cost | Notes |
 |----------|-------|------|-------|
-| Google Gemini | gemini-2.5-flash | Free | Fast |
-| Groq | llama-3.3-70b | Free | Very fast |
-| Anthropic | claude-sonnet-4 | Paid | Excellent quality |
-| OpenAI | gpt-4o-mini | Paid | Good |
+| Google Gemini | gemini-2.5-flash | Free | Recommended to start |
+| Groq | llama-3.3-70b | Free | Fastest |
+| Anthropic | claude-sonnet-4 | Paid | Best analysis quality |
+| OpenAI | gpt-4o-mini | Paid | Good balance |
 
 ---
 
@@ -176,9 +197,10 @@ This tool is intended for:
 - [ ] Web interface — submit a domain, receive a report
 - [ ] PDF export — professional report for client delivery
 - [ ] VirusTotal module — IP and domain reputation
-- [ ] Shodan paid plan integration
 - [ ] Email harvesting module
-- [ ] Slack / Telegram notifications
+- [ ] Shodan paid plan integration
+- [ ] Scheduled scans — monitor a target over time
+- [ ] Diff reports — detect changes between scans
 
 ---
 

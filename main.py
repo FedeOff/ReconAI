@@ -1,11 +1,13 @@
 # ============================================================
-# OSINT Agent - Main
-# Collega tutti i moduli e orchestra il flusso completo
+# ReconAI - Main
+# Orchestra scan + analisi AI + notifica Telegram
 #
 # Uso:
 #   python main.py tesla.com
 #   python main.py --target tesla.com
-#   python main.py                     (te lo chiede interattivo)
+#   python main.py                        (chiede interattivo)
+#   python main.py tesla.com --no-scan    (solo sottodomini)
+#   python main.py tesla.com --no-telegram (senza notifica)
 # ============================================================
 
 import argparse
@@ -14,77 +16,48 @@ import os
 import sys
 from datetime import datetime
 
-# Importiamo le funzioni dai moduli che abbiamo già scritto
-# Non duplichiamo il codice — lo richiamiamo
 from osint_step1 import trova_sottodomini
 from shodan_module import risolvi_ip
 from scanner_module import scansiona_tutti
 
 
 # ============================================================
-# ARGPARSE - gestione argomenti da riga di comando
+# ARGPARSE
 # ============================================================
 
 def leggi_argomenti():
-    # ArgumentParser = oggetto che gestisce gli argomenti
     parser = argparse.ArgumentParser(
-        description="OSINT Agent — ricognizione automatica di un dominio",
+        description="ReconAI — OSINT reconnaissance agent",
         epilog="Esempio: python main.py tesla.com"
     )
 
-    # Argomento posizionale opzionale — puoi scrivere solo il dominio
-    # nargs="?" = zero o uno (opzionale)
-    parser.add_argument(
-        "dominio",
-        nargs="?",
-        help="Dominio target (es. tesla.com)"
-    )
-
-    # Argomento con flag — alternativa con --target
-    parser.add_argument(
-        "--target", "-t",
-        help="Dominio target (alternativa: python main.py --target tesla.com)"
-    )
-
-    # Argomento opzionale: salva report in una cartella specifica
-    parser.add_argument(
-        "--output", "-o",
-        default="report",
-        help="Cartella dove salvare i risultati (default: ./report)"
-    )
-
-    # Argomento opzionale: salta il port scan (più veloce)
-    parser.add_argument(
-        "--no-scan",
-        action="store_true",
-        help="Salta il port scan (solo enumerazione sottodomini)"
-    )
+    parser.add_argument("dominio", nargs="?", help="Dominio target")
+    parser.add_argument("--target", "-t", help="Dominio target (alternativa)")
+    parser.add_argument("--output", "-o", default="report",
+                        help="Cartella output (default: ./report)")
+    parser.add_argument("--no-scan", action="store_true",
+                        help="Salta il port scan")
+    parser.add_argument("--no-telegram", action="store_true",
+                        help="Salta la notifica Telegram")
 
     args = parser.parse_args()
-
-    # Priorità: --target > argomento posizionale > chiede interattivo
     target = args.target or args.dominio
 
     if not target:
-        # Nessun argomento passato — chiede interattivamente
         print("\n" + "="*50)
-        print("         OSINT Agent v0.1")
+        print("         ReconAI v0.1")
         print("="*50)
         target = input("\n[?] Inserisci il dominio target: ").strip()
-
         if not target:
             print("[!] Nessun dominio inserito. Uscita.")
             sys.exit(1)
 
-    # Pulizia input — rimuove http://, https://, slash finali
     target = target.replace("https://", "").replace("http://", "").rstrip("/")
-
-    return target, args.output, args.no_scan
+    return target, args.output, args.no_scan, args.no_telegram
 
 
 # ============================================================
 # SETUP CARTELLA OUTPUT
-# Ogni scan crea una cartella con timestamp — non si sovrascrive
 # ============================================================
 
 def crea_cartella_output(base, dominio):
@@ -95,24 +68,22 @@ def crea_cartella_output(base, dominio):
 
 
 # ============================================================
-# FUNZIONE PRINCIPALE
+# MAIN
 # ============================================================
 
 def main():
 
-    # Leggi argomenti
-    target, output_base, salta_scan = leggi_argomenti()
+    target, output_base, salta_scan, salta_telegram = leggi_argomenti()
 
-    # Intestazione
     print("\n" + "="*50)
-    print("         OSINT Agent v0.1")
+    print("         ReconAI v0.1")
     print("="*50)
-    print(f"  Target  : {target}")
-    print(f"  Avvio   : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  Port scan: {'NO (--no-scan)' if salta_scan else 'SI'}")
+    print(f"  Target    : {target}")
+    print(f"  Avvio     : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  Port scan : {'NO (--no-scan)' if salta_scan else 'SI'}")
+    print(f"  Telegram  : {'NO (--no-telegram)' if salta_telegram else 'SI'}")
     print("="*50)
 
-    # Crea cartella output per questo scan
     cartella = crea_cartella_output(output_base, target)
     print(f"\n[*] Output in: {cartella}\n")
 
@@ -125,7 +96,7 @@ def main():
     }
 
     # ============================================================
-    # STEP 1: Enumerazione sottodomini
+    # STEP 1: Sottodomini
     # ============================================================
 
     print("\n" + "-"*40)
@@ -140,7 +111,6 @@ def main():
 
     risultati_completi["sottodomini"] = sottodomini
 
-    # Salva risultato intermedio
     with open(os.path.join(cartella, "sottodomini.json"), "w") as f:
         json.dump(sottodomini, f, indent=2)
 
@@ -158,7 +128,6 @@ def main():
         print("[!] Nessun IP risolto. Uscita.")
         sys.exit(1)
 
-    # Converti per JSON (le liste vanno bene, i set no)
     ip_map_serializable = {ip: subs for ip, subs in ip_map.items()}
     risultati_completi["ip_map"] = ip_map_serializable
 
@@ -166,7 +135,7 @@ def main():
         json.dump(ip_map_serializable, f, indent=2)
 
     # ============================================================
-    # STEP 3: Port scan (opzionale)
+    # STEP 3: Port scan
     # ============================================================
 
     if not salta_scan:
@@ -179,19 +148,53 @@ def main():
 
         with open(os.path.join(cartella, "port_scan.json"), "w") as f:
             json.dump(risultati_scan, f, indent=2)
-
     else:
         print("\n[*] Port scan saltato (--no-scan)")
 
-    # ============================================================
-    # REPORT FINALE
-    # ============================================================
-
+    # Salva report completo
     report_path = os.path.join(cartella, "report_completo.json")
     with open(report_path, "w") as f:
         json.dump(risultati_completi, f, indent=2)
 
-    # Riepilogo a schermo
+    # ============================================================
+    # STEP 4: Analisi AI automatica
+    # ============================================================
+
+    print("\n" + "-"*40)
+    print("STEP 4 — Analisi AI")
+    print("-"*40)
+
+    analisi_path = None
+
+    try:
+        from analyze import prepara_prompt, chiama_ai, carica_config
+
+        config = carica_config()
+        provider = config.get("AI_PROVIDER", "gemini")
+        prompt = prepara_prompt(risultati_completi)
+        analisi = chiama_ai(prompt, config)
+
+        if analisi:
+            analisi_path = os.path.join(cartella, f"analisi_{provider}.txt")
+            with open(analisi_path, "w") as f:
+                f.write(f"ANALISI OSINT — {target}\n")
+                f.write(f"Provider  : {provider.upper()}\n")
+                f.write(f"Generata  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("="*50 + "\n\n")
+                f.write(analisi)
+
+            print(f"[+] Analisi salvata: {analisi_path}")
+        else:
+            print("[!] Analisi AI non riuscita")
+
+    except Exception as e:
+        print(f"[!] Errore analisi AI: {e}")
+        print("[*] Puoi eseguirla manualmente con: python analyze.py")
+
+    # ============================================================
+    # RIEPILOGO FINALE
+    # ============================================================
+
     print("\n" + "="*50)
     print("  SCAN COMPLETATO")
     print("="*50)
@@ -204,12 +207,25 @@ def main():
         print(f"  IP con porte aperte : {ip_con_porte}")
         print(f"  Porte totali        : {totale_porte}")
 
-    print(f"\n  Report salvato in   : {cartella}/")
+    print(f"\n  Report in           : {cartella}/")
     print("="*50 + "\n")
 
-    # Prossimo step — quando aggiungiamo Claude
-    print("[*] Prossimo step: analisi AI del report")
-    print(f"    python analyze.py {report_path}\n")
+    # ============================================================
+    # STEP 5: Notifica Telegram
+    # ============================================================
+
+    if not salta_telegram:
+        print("-"*40)
+        print("STEP 5 — Notifica Telegram")
+        print("-"*40)
+
+        try:
+            from telegram_module import invia_report_telegram
+            invia_report_telegram(risultati_completi, analisi_path)
+        except Exception as e:
+            print(f"[!] Errore Telegram: {e}")
+    else:
+        print("[*] Notifica Telegram saltata (--no-telegram)")
 
 
 if __name__ == "__main__":
