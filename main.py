@@ -5,9 +5,11 @@
 # Uso:
 #   python main.py tesla.com
 #   python main.py --target tesla.com
-#   python main.py                        (chiede interattivo)
-#   python main.py tesla.com --no-scan    (solo sottodomini)
-#   python main.py tesla.com --no-telegram (senza notifica)
+#   python main.py                          (tutto interattivo)
+#   python main.py tesla.com --no-scan
+#   python main.py tesla.com --no-virustotal
+#   python main.py tesla.com --no-wayback
+#   python main.py tesla.com --no-telegram
 # ============================================================
 
 import argparse
@@ -22,7 +24,22 @@ from scanner_module import scansiona_tutti
 
 
 # ============================================================
-# ARGPARSE
+# HELPER — chiede y/n interattivamente
+# ============================================================
+
+def chiedi(domanda):
+    while True:
+        risposta = input(f"{domanda} [y/n]: ").strip().lower()
+        if risposta in ["y", "yes", "s", "si"]:
+            return True
+        elif risposta in ["n", "no"]:
+            return False
+        else:
+            print("    Digita 'y' per si o 'n' per no.")
+
+
+# ============================================================
+# ARGPARSE + PROMPT INTERATTIVI
 # ============================================================
 
 def leggi_argomenti():
@@ -36,24 +53,37 @@ def leggi_argomenti():
     parser.add_argument("--output", "-o", default="report",
                         help="Cartella output (default: ./report)")
     parser.add_argument("--no-scan", action="store_true",
-                        help="Salta il port scan")
+                        help="Salta il port scan senza chiedere")
+    parser.add_argument("--no-virustotal", action="store_true",
+                        help="Salta VirusTotal senza chiedere")
+    parser.add_argument("--no-wayback", action="store_true",
+                        help="Salta Wayback Machine senza chiedere")
     parser.add_argument("--no-telegram", action="store_true",
-                        help="Salta la notifica Telegram")
+                        help="Salta Telegram senza chiedere")
 
     args = parser.parse_args()
     target = args.target or args.dominio
 
+    print("\n" + "="*50)
+    print("         ReconAI v0.1")
+    print("="*50)
+
     if not target:
-        print("\n" + "="*50)
-        print("         ReconAI v0.1")
-        print("="*50)
         target = input("\n[?] Inserisci il dominio target: ").strip()
         if not target:
             print("[!] Nessun dominio inserito. Uscita.")
             sys.exit(1)
 
     target = target.replace("https://", "").replace("http://", "").rstrip("/")
-    return target, args.output, args.no_scan, args.no_telegram
+
+    print(f"\n  Target: {target}\n")
+
+    salta_scan     = args.no_scan        or not chiedi("[?] Vuoi eseguire il port scan?")
+    salta_vt       = args.no_virustotal  or not chiedi("[?] Vuoi eseguire l'analisi VirusTotal?")
+    salta_wayback  = args.no_wayback     or not chiedi("[?] Vuoi eseguire l'analisi Wayback Machine?")
+    salta_telegram = args.no_telegram    or not chiedi("[?] Vuoi ricevere la notifica Telegram?")
+
+    return target, args.output, salta_scan, salta_vt, salta_wayback, salta_telegram
 
 
 # ============================================================
@@ -73,16 +103,15 @@ def crea_cartella_output(base, dominio):
 
 def main():
 
-    target, output_base, salta_scan, salta_telegram = leggi_argomenti()
+    target, output_base, salta_scan, salta_vt, salta_wayback, salta_telegram = leggi_argomenti()
 
-    print("\n" + "="*50)
-    print("         ReconAI v0.1")
-    print("="*50)
-    print(f"  Target    : {target}")
-    print(f"  Avvio     : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  Port scan : {'NO (--no-scan)' if salta_scan else 'SI'}")
-    print(f"  Telegram  : {'NO (--no-telegram)' if salta_telegram else 'SI'}")
-    print("="*50)
+    print("\n" + "-"*50)
+    print(f"  Port scan        : {'NO' if salta_scan else 'SI'}")
+    print(f"  VirusTotal       : {'NO' if salta_vt else 'SI'}")
+    print(f"  Wayback Machine  : {'NO' if salta_wayback else 'SI'}")
+    print(f"  Telegram         : {'NO' if salta_telegram else 'SI'}")
+    print(f"  Avvio            : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("-"*50)
 
     cartella = crea_cartella_output(output_base, target)
     print(f"\n[*] Output in: {cartella}\n")
@@ -92,7 +121,9 @@ def main():
         "timestamp": datetime.now().isoformat(),
         "sottodomini": [],
         "ip_map": {},
-        "scan": []
+        "scan": [],
+        "virustotal": {},
+        "wayback": {}
     }
 
     # ============================================================
@@ -149,7 +180,59 @@ def main():
         with open(os.path.join(cartella, "port_scan.json"), "w") as f:
             json.dump(risultati_scan, f, indent=2)
     else:
-        print("\n[*] Port scan saltato (--no-scan)")
+        print("\n[*] Port scan saltato")
+
+    # ============================================================
+    # STEP 4: VirusTotal
+    # ============================================================
+
+    if not salta_vt:
+        print("\n" + "-"*40)
+        print("STEP 4 — VirusTotal")
+        print("-"*40)
+
+        try:
+            from virustotal_module import analizza_con_virustotal
+
+            vt_risultati = analizza_con_virustotal(sottodomini, ip_map)
+
+            if vt_risultati:
+                risultati_completi["virustotal"] = vt_risultati
+                with open(os.path.join(cartella, "virustotal.json"), "w") as f:
+                    json.dump(vt_risultati, f, indent=2)
+                print(f"[+] VirusTotal salvato in: {cartella}/virustotal.json")
+            else:
+                print("[!] VirusTotal non disponibile — controlla la key nel .env")
+
+        except Exception as e:
+            print(f"[!] Errore VirusTotal: {e}")
+    else:
+        print("\n[*] VirusTotal saltato")
+
+    # ============================================================
+    # STEP 5: Wayback Machine
+    # ============================================================
+
+    if not salta_wayback:
+        print("\n" + "-"*40)
+        print("STEP 5 — Wayback Machine")
+        print("-"*40)
+
+        try:
+            from wayback_module import analizza_con_wayback
+
+            wb_risultati = analizza_con_wayback(target, sottodomini)
+
+            if wb_risultati:
+                risultati_completi["wayback"] = wb_risultati
+                with open(os.path.join(cartella, "wayback.json"), "w") as f:
+                    json.dump(wb_risultati, f, indent=2)
+                print(f"[+] Wayback salvato in: {cartella}/wayback.json")
+
+        except Exception as e:
+            print(f"[!] Errore Wayback Machine: {e}")
+    else:
+        print("\n[*] Wayback Machine saltata")
 
     # Salva report completo
     report_path = os.path.join(cartella, "report_completo.json")
@@ -157,35 +240,41 @@ def main():
         json.dump(risultati_completi, f, indent=2)
 
     # ============================================================
-    # STEP 4: Analisi AI automatica
+    # STEP 6: Analisi AI
     # ============================================================
 
     print("\n" + "-"*40)
-    print("STEP 4 — Analisi AI")
+    print("STEP 6 — Analisi AI")
     print("-"*40)
 
     analisi_path = None
 
     try:
-        from analyze import prepara_prompt, chiama_ai, carica_config
+        from analyze import prepara_prompt, chiama_ai, carica_config, scegli_provider, esegui_analisi, PROVIDER_INFO
 
         config = carica_config()
-        provider = config.get("AI_PROVIDER", "gemini")
-        prompt = prepara_prompt(risultati_completi)
-        analisi = chiama_ai(prompt, config)
 
-        if analisi:
-            analisi_path = os.path.join(cartella, f"analisi_{provider}.txt")
-            with open(analisi_path, "w") as f:
-                f.write(f"ANALISI OSINT — {target}\n")
-                f.write(f"Provider  : {provider.upper()}\n")
-                f.write(f"Generata  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("="*50 + "\n\n")
-                f.write(analisi)
+        # Scelta interattiva del provider
+        provider = scegli_provider(config)
 
-            print(f"[+] Analisi salvata: {analisi_path}")
+        if not provider:
+            print("[!] Nessun provider configurato nel .env — analisi saltata")
         else:
-            print("[!] Analisi AI non riuscita")
+            prompt = prepara_prompt(risultati_completi)
+            analisi, provider_usato = esegui_analisi(prompt, config, provider)
+
+            if analisi:
+                analisi_path = os.path.join(cartella, f"analisi_{provider_usato}.txt")
+                nome_provider = PROVIDER_INFO.get(provider_usato, {}).get("nome", provider_usato)
+                with open(analisi_path, "w") as f:
+                    f.write(f"ANALISI OSINT — {target}\n")
+                    f.write(f"Provider  : {nome_provider}\n")
+                    f.write(f"Generata  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write("="*50 + "\n\n")
+                    f.write(analisi)
+                print(f"[+] Analisi salvata: {analisi_path}")
+            else:
+                print("[!] Analisi AI non riuscita")
 
     except Exception as e:
         print(f"[!] Errore analisi AI: {e}")
@@ -198,25 +287,38 @@ def main():
     print("\n" + "="*50)
     print("  SCAN COMPLETATO")
     print("="*50)
-    print(f"  Sottodomini trovati : {len(sottodomini)}")
-    print(f"  IP unici            : {len(ip_map)}")
+    print(f"  Sottodomini trovati  : {len(sottodomini)}")
+    print(f"  IP unici             : {len(ip_map)}")
 
     if not salta_scan and risultati_completi["scan"]:
         totale_porte = sum(r["totale_porte"] for r in risultati_completi["scan"])
         ip_con_porte = sum(1 for r in risultati_completi["scan"] if r["totale_porte"] > 0)
-        print(f"  IP con porte aperte : {ip_con_porte}")
-        print(f"  Porte totali        : {totale_porte}")
+        print(f"  IP con porte aperte  : {ip_con_porte}")
+        print(f"  Porte totali         : {totale_porte}")
 
-    print(f"\n  Report in           : {cartella}/")
+    if not salta_vt and risultati_completi.get("virustotal"):
+        vt = risultati_completi["virustotal"]
+        ip_rischio = [r for r in vt.get("ip", [])
+                      if r.get("rischio") in ["ALTO", "MEDIO"]]
+        print(f"  IP a rischio VT      : {len(ip_rischio)}")
+
+    if not salta_wayback and risultati_completi.get("wayback"):
+        wb = risultati_completi["wayback"]
+        url_int = wb.get("url_interessanti", {})
+        totale_int = sum(len(v) for v in url_int.values())
+        print(f"  URL interessanti WB  : {totale_int}")
+        print(f"  Prima archiviazione  : {wb.get('prima_archiviazione', 'N/A')}")
+
+    print(f"\n  Report in            : {cartella}/")
     print("="*50 + "\n")
 
     # ============================================================
-    # STEP 5: Notifica Telegram
+    # STEP 7: Telegram
     # ============================================================
 
     if not salta_telegram:
         print("-"*40)
-        print("STEP 5 — Notifica Telegram")
+        print("STEP 7 — Notifica Telegram")
         print("-"*40)
 
         try:
@@ -225,7 +327,7 @@ def main():
         except Exception as e:
             print(f"[!] Errore Telegram: {e}")
     else:
-        print("[*] Notifica Telegram saltata (--no-telegram)")
+        print("[*] Notifica Telegram saltata")
 
 
 if __name__ == "__main__":

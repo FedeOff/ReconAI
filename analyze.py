@@ -1,9 +1,9 @@
 # ============================================================
-# OSINT Agent - Analyze
-# Analizza il report con il provider AI scelto nel .env
+# ReconAI - Analyze
+# Analisi AI con selezione provider interattiva e fallback
 #
 # Uso:
-#   python analyze.py                        (ultimo report automatico)
+#   python analyze.py
 #   python analyze.py report/tesla.com_xxx/report_completo.json
 # ============================================================
 
@@ -21,19 +21,10 @@ from datetime import datetime
 def carica_config():
     config = {}
 
-    # Prima legge variabili d'ambiente
-    for chiave in ["AI_PROVIDER", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
-                   "GROQ_API_KEY", "OPENAI_API_KEY", "SHODAN_API_KEY"]:
-        valore = os.environ.get(chiave)
-        if valore:
-            config[chiave] = valore
-
-    # Poi sovrascrive con il file .env
     try:
         with open(".env", "r") as f:
             for riga in f:
                 riga = riga.strip()
-                # Salta commenti e righe vuote
                 if not riga or riga.startswith("#"):
                     continue
                 if "=" in riga:
@@ -42,11 +33,17 @@ def carica_config():
     except FileNotFoundError:
         pass
 
+    for chiave in ["AI_PROVIDER", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+                   "GROQ_API_KEY", "OPENAI_API_KEY"]:
+        valore = os.environ.get(chiave)
+        if valore:
+            config[chiave] = valore
+
     return config
 
 
 # ============================================================
-# TROVA ULTIMO REPORT AUTOMATICAMENTE
+# TROVA ULTIMO REPORT
 # ============================================================
 
 def trova_ultimo_report():
@@ -70,7 +67,61 @@ def trova_ultimo_report():
 
 
 # ============================================================
-# PREPARA IL PROMPT
+# SELEZIONE PROVIDER INTERATTIVA
+# Mostra solo i provider che hanno una key configurata
+# ============================================================
+
+PROVIDER_INFO = {
+    "gemini":    {"nome": "Google Gemini 2.5 Flash", "key": "GEMINI_API_KEY",    "gratuito": True},
+    "groq":      {"nome": "Groq LLaMA 3.3",          "key": "GROQ_API_KEY",      "gratuito": True},
+    "anthropic": {"nome": "Anthropic Claude",         "key": "ANTHROPIC_API_KEY", "gratuito": False},
+    "openai":    {"nome": "OpenAI GPT-4o-mini",       "key": "OPENAI_API_KEY",    "gratuito": False},
+}
+
+def scegli_provider(config, escludi=None):
+    if escludi is None:
+        escludi = []
+
+    # Trova provider disponibili (hanno la key nel .env)
+    disponibili = [
+        (id_provider, info)
+        for id_provider, info in PROVIDER_INFO.items()
+        if config.get(info["key"]) and id_provider not in escludi
+    ]
+
+    if not disponibili:
+        return None
+
+    # Se c'è solo uno disponibile, usalo direttamente
+    if len(disponibili) == 1:
+        id_provider, info = disponibili[0]
+        print(f"[*] Provider disponibile: {info['nome']}")
+        return id_provider
+
+    # Mostra menu di scelta
+    print("\n[?] Scegli il provider AI:\n")
+    for i, (id_provider, info) in enumerate(disponibili, 1):
+        gratuito = "gratuito" if info["gratuito"] else "a pagamento"
+        print(f"    {i}. {info['nome']} ({gratuito})")
+
+    print()
+
+    while True:
+        scelta = input(f"    Inserisci il numero [1-{len(disponibili)}]: ").strip()
+        try:
+            indice = int(scelta) - 1
+            if 0 <= indice < len(disponibili):
+                id_provider, info = disponibili[indice]
+                print(f"\n[+] Provider scelto: {info['nome']}\n")
+                return id_provider
+            else:
+                print(f"    Inserisci un numero tra 1 e {len(disponibili)}")
+        except ValueError:
+            print("    Inserisci un numero valido")
+
+
+# ============================================================
+# PREPARA PROMPT
 # ============================================================
 
 def prepara_prompt(report):
@@ -78,6 +129,8 @@ def prepara_prompt(report):
     sottodomini = report.get("sottodomini", [])
     ip_map = report.get("ip_map", {})
     scan = report.get("scan", [])
+    wayback = report.get("wayback", {})
+    virustotal = report.get("virustotal", {})
 
     testo = f"""Sei un esperto di sicurezza informatica. Analizza i seguenti risultati OSINT su {target}.
 
@@ -90,7 +143,7 @@ IP UNICI: {len(ip_map)}
 SOTTODOMINI:
 {chr(10).join(f"  - {s}" for s in sottodomini)}
 
-MAPPA IP → SOTTODOMINI:
+MAPPA IP:
 """
     for ip, subs in ip_map.items():
         testo += f"\n  {ip}:\n"
@@ -101,7 +154,6 @@ MAPPA IP → SOTTODOMINI:
         testo += "\nPORT SCAN:\n"
         for r in scan:
             testo += f"\n  IP: {r.get('ip')}\n"
-            testo += f"  Sottodomini: {', '.join(r.get('sottodomini', [])[:3])}\n"
             porte = r.get("porte_aperte", [])
             if porte:
                 for p in porte:
@@ -113,28 +165,39 @@ MAPPA IP → SOTTODOMINI:
             else:
                 testo += "    - nessuna porta aperta\n"
 
+    if virustotal:
+        testo += "\nVIRUSTOTAL:\n"
+        for ip_data in virustotal.get("ip", []):
+            if ip_data.get("trovato"):
+                testo += (f"  {ip_data['ip']} — rischio {ip_data.get('rischio')} "
+                         f"({ip_data.get('malevolo', 0)} engine)\n")
+        for dom_data in virustotal.get("domini", []):
+            if dom_data.get("trovato") and dom_data.get("malevolo", 0) > 0:
+                testo += (f"  {dom_data['dominio']} — rischio {dom_data.get('rischio')} "
+                         f"({dom_data.get('malevolo', 0)} engine)\n")
+
+    if wayback:
+        testo += f"\nWAYBACK MACHINE:\n"
+        testo += f"  Prima archiviazione: {wayback.get('prima_archiviazione', 'N/A')}\n"
+        testo += f"  URL totali trovati: {wayback.get('totale_url_trovati', 0)}\n"
+        url_int = wayback.get("url_interessanti", {})
+        for categoria, url_list in url_int.items():
+            testo += f"\n  {categoria.upper()}:\n"
+            for entry in url_list[:5]:
+                testo += f"    - {entry['url']} [{entry['timestamp']}]\n"
+
     testo += """
 ============================================================
 Produci un report con queste sezioni:
 
 1. PANORAMICA
-   Superficie di attacco identificata.
-
 2. SOTTODOMINI INTERESSANTI
-   Quali meritano approfondimento e perché
-   (staging, admin, api, dev, test, vpn, mail, ecc.)
-
 3. ANALISI PORTE E SERVIZI
-   Commenta porte aperte e configurazioni anomale.
-
 4. TECNOLOGIE IDENTIFICATE
-   Tecnologie riconosciute da banner e risposte HTTP.
-
-5. PRIORITÀ DI APPROFONDIMENTO
-   Lista ordinata di cosa investigare prima.
-
-6. NOTE DI SICUREZZA
-   Considerazioni generali sulla postura di sicurezza.
+5. FINDINGS VIRUSTOTAL (se presenti)
+6. FINDINGS WAYBACK MACHINE (se presenti)
+7. PRIORITA' DI APPROFONDIMENTO
+8. NOTE DI SICUREZZA
 
 Sii preciso e tecnico. Contesto: pentest autorizzato.
 ============================================================"""
@@ -147,8 +210,6 @@ Sii preciso e tecnico. Contesto: pentest autorizzato.
 # ============================================================
 
 def chiama_anthropic(prompt, api_key):
-    print("[*] Provider: Anthropic (Claude)")
-
     risposta = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -158,7 +219,7 @@ def chiama_anthropic(prompt, api_key):
         },
         json={
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 4096,
+            "max_tokens": 16000,
             "messages": [{"role": "user", "content": prompt}]
         },
         timeout=60
@@ -168,14 +229,12 @@ def chiama_anthropic(prompt, api_key):
 
 
 def chiama_gemini(prompt, api_key):
-    print("[*] Provider: Google Gemini")
-
     risposta = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}",
         headers={"Content-Type": "application/json"},
         json={
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"maxOutputTokens": 4096}
+            "generationConfig": {"maxOutputTokens": 8192}
         },
         timeout=60
     )
@@ -184,8 +243,6 @@ def chiama_gemini(prompt, api_key):
 
 
 def chiama_groq(prompt, api_key):
-    print("[*] Provider: Groq (LLaMA 3.3)")
-
     risposta = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={
@@ -194,7 +251,7 @@ def chiama_groq(prompt, api_key):
         },
         json={
             "model": "llama-3.3-70b-versatile",
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "messages": [{"role": "user", "content": prompt}]
         },
         timeout=60
@@ -204,8 +261,6 @@ def chiama_groq(prompt, api_key):
 
 
 def chiama_openai(prompt, api_key):
-    print("[*] Provider: OpenAI (GPT-4o-mini)")
-
     risposta = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={
@@ -214,7 +269,7 @@ def chiama_openai(prompt, api_key):
         },
         json={
             "model": "gpt-4o-mini",
-            "max_tokens": 4096,
+            "max_tokens": 16384,
             "messages": [{"role": "user", "content": prompt}]
         },
         timeout=60
@@ -224,38 +279,76 @@ def chiama_openai(prompt, api_key):
 
 
 # ============================================================
-# ROUTER — sceglie il provider giusto
+# ROUTER — chiama il provider giusto
 # ============================================================
 
-def chiama_ai(prompt, config):
-    provider = config.get("AI_PROVIDER", "gemini").lower()
+def chiama_ai(prompt, config, provider=None):
+    if provider is None:
+        provider = config.get("AI_PROVIDER", "gemini").lower()
 
-    if provider == "anthropic":
-        key = config.get("ANTHROPIC_API_KEY")
-        if not key:
-            raise Exception("ANTHROPIC_API_KEY non trovata nel .env")
-        return chiama_anthropic(prompt, key)
+    chiama = {
+        "anthropic": (chiama_anthropic, "ANTHROPIC_API_KEY"),
+        "gemini":    (chiama_gemini,    "GEMINI_API_KEY"),
+        "groq":      (chiama_groq,      "GROQ_API_KEY"),
+        "openai":    (chiama_openai,    "OPENAI_API_KEY"),
+    }
 
-    elif provider == "gemini":
-        key = config.get("GEMINI_API_KEY")
-        if not key:
-            raise Exception("GEMINI_API_KEY non trovata nel .env")
-        return chiama_gemini(prompt, key)
+    if provider not in chiama:
+        raise Exception(f"Provider '{provider}' non riconosciuto")
 
-    elif provider == "groq":
-        key = config.get("GROQ_API_KEY")
-        if not key:
-            raise Exception("GROQ_API_KEY non trovata nel .env")
-        return chiama_groq(prompt, key)
+    funzione, chiave_key = chiama[provider]
+    api_key = config.get(chiave_key)
 
-    elif provider == "openai":
-        key = config.get("OPENAI_API_KEY")
-        if not key:
-            raise Exception("OPENAI_API_KEY non trovata nel .env")
-        return chiama_openai(prompt, key)
+    if not api_key:
+        raise Exception(f"Key {chiave_key} non trovata nel .env")
 
-    else:
-        raise Exception(f"Provider '{provider}' non riconosciuto. Usa: anthropic, gemini, groq, openai")
+    return funzione(prompt, api_key)
+
+
+# ============================================================
+# ANALISI CON FALLBACK INTERATTIVO
+# ============================================================
+
+def esegui_analisi(prompt, config, provider):
+    provider_usati = []
+
+    while True:
+        provider_usati.append(provider)
+        nome = PROVIDER_INFO.get(provider, {}).get("nome", provider)
+
+        print(f"[*] Analisi con {nome}...")
+
+        try:
+            risultato = chiama_ai(prompt, config, provider)
+            print(f"[+] Analisi completata con {nome}")
+            return risultato, provider
+
+        except Exception as e:
+            print(f"[!] Errore con {nome}: {e}")
+
+            # Cerca altri provider disponibili non ancora provati
+            altri = [
+                p for p in PROVIDER_INFO
+                if config.get(PROVIDER_INFO[p]["key"])
+                and p not in provider_usati
+            ]
+
+            if not altri:
+                print("[!] Nessun altro provider disponibile.")
+                return None, provider
+
+            print(f"\n[?] Vuoi provare con un altro provider?")
+            risposta = input("    [y/n]: ").strip().lower()
+
+            if risposta not in ["y", "yes", "s", "si"]:
+                return None, provider
+
+            # Scegli tra gli altri disponibili
+            provider = scegli_provider(config, escludi=provider_usati)
+
+            if not provider:
+                print("[!] Nessun altro provider disponibile.")
+                return None, provider
 
 
 # ============================================================
@@ -285,38 +378,45 @@ def main():
 
     # Carica config
     config = carica_config()
-    provider = config.get("AI_PROVIDER", "gemini")
 
     print("\n" + "="*50)
-    print("       OSINT Agent — Analisi AI")
+    print("       ReconAI — Analisi AI")
     print("="*50)
     print(f"  Target  : {report.get('target')}")
-    print(f"  Provider: {provider.upper()}")
     print(f"  Report  : {report_path}")
-    print("="*50 + "\n")
+    print("="*50)
 
-    # Prepara prompt e chiama AI
+    # Scegli provider interattivamente
+    provider = scegli_provider(config)
+
+    if not provider:
+        print("[!] Nessun provider configurato nel .env")
+        print("    Aggiungi almeno una key (GEMINI_API_KEY, GROQ_API_KEY, ecc.)")
+        sys.exit(1)
+
+    # Prepara prompt
     prompt = prepara_prompt(report)
 
-    try:
-        analisi = chiama_ai(prompt, config)
-    except Exception as e:
-        print(f"[!] Errore: {e}")
+    # Esegui analisi con fallback
+    analisi, provider_usato = esegui_analisi(prompt, config, provider)
+
+    if not analisi:
+        print("[!] Analisi fallita con tutti i provider disponibili.")
         sys.exit(1)
 
     # Stampa risultato
     print("\n" + "="*50)
-    print(f"  ANALISI — {provider.upper()}")
+    print(f"  ANALISI — {PROVIDER_INFO.get(provider_usato, {}).get('nome', provider_usato)}")
     print("="*50 + "\n")
     print(analisi)
 
     # Salva nella cartella del report
     cartella = os.path.dirname(report_path)
-    output_path = os.path.join(cartella, f"analisi_{provider}.txt")
+    output_path = os.path.join(cartella, f"analisi_{provider_usato}.txt")
 
     with open(output_path, "w") as f:
         f.write(f"ANALISI OSINT — {report.get('target')}\n")
-        f.write(f"Provider  : {provider.upper()}\n")
+        f.write(f"Provider  : {PROVIDER_INFO.get(provider_usato, {}).get('nome', provider_usato)}\n")
         f.write(f"Generata  : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write("="*50 + "\n\n")
         f.write(analisi)

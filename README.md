@@ -2,7 +2,7 @@
 
 > Automated OSINT reconnaissance agent powered by AI — built for security professionals and pentest engagements.
 
-ReconAI automates the passive reconnaissance phase of a security assessment. Given a target domain, it enumerates subdomains, resolves IPs, scans for open ports, and delivers a professional AI-powered analysis report — directly to your Telegram.
+ReconAI automates the passive reconnaissance phase of a security assessment. Given a target domain, it enumerates subdomains, resolves IPs, scans for open ports, checks reputation on VirusTotal, digs into historical data via Wayback Machine, and delivers a professional AI-powered analysis report — directly to your Telegram.
 
 ---
 
@@ -12,10 +12,14 @@ ReconAI automates the passive reconnaissance phase of a security assessment. Giv
 - **IP deduplication** — resolves and deduplicates IPs to avoid redundant queries
 - **Port scanning** — multi-threaded socket scanner with service banner grabbing
 - **Shodan integration** — ready for paid Shodan plans for deeper host intelligence
+- **VirusTotal analysis** — checks IP and domain reputation across 90+ antivirus engines
+- **Wayback Machine** — finds archived URLs, old endpoints, and historical technologies
 - **AI-powered analysis** — passes all findings to an LLM for professional report generation
 - **Multi-provider AI** — supports Anthropic Claude, Google Gemini, Groq, and OpenAI
-- **Automatic fallback** — if the primary data source is unavailable, switches to backup automatically
+- **Interactive provider selection** — choose your AI provider at runtime with automatic fallback
+- **Automatic source fallback** — if crt.sh is unavailable, switches to HackerTarget automatically
 - **Telegram notifications** — receive scan summary and full AI analysis directly on Telegram
+- **Interactive mode** — prompts for each optional step at runtime, no flags to remember
 - **Organized output** — each scan creates a timestamped folder with JSON data and AI analysis
 
 ---
@@ -27,11 +31,13 @@ python main.py target.com
          │
          ├── Step 1 — Subdomain enumeration (crt.sh → HackerTarget fallback)
          ├── Step 2 — IP resolution & deduplication
-         ├── Step 3 — Multi-threaded port scan + banner grabbing
-         ├── Step 4 — AI analysis (auto, provider from .env)
-         └── Step 5 — Telegram notification
+         ├── Step 3 — Port scan + banner grabbing      [optional, asks at runtime]
+         ├── Step 4 — VirusTotal reputation check      [optional, asks at runtime]
+         ├── Step 5 — Wayback Machine analysis         [optional, asks at runtime]
+         ├── Step 6 — AI analysis (provider chosen interactively)
+         └── Step 7 — Telegram notification            [optional, asks at runtime]
                            │
-                           ├── Summary: subdomains, IPs, open ports
+                           ├── Summary: subdomains, IPs, open ports, risk levels
                            ├── Interesting subdomains highlighted
                            └── Button: download full AI analysis
 ```
@@ -53,66 +59,43 @@ cd reconai
 pip install requests
 ```
 
-### 3. Configure your API keys
+### 3. Configure API keys
 
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Edit `.env` with your keys:
-
-```env
-# AI provider — choose one
-AI_PROVIDER=gemini
-
-# Free providers
-GEMINI_API_KEY=your-key        # aistudio.google.com
-GROQ_API_KEY=your-key          # console.groq.com
-
-# Paid providers
-ANTHROPIC_API_KEY=your-key     # console.anthropic.com
-OPENAI_API_KEY=your-key        # platform.openai.com
-
-# OSINT
-SHODAN_API_KEY=your-key        # shodan.io
-
-# Telegram notifications
-TELEGRAM_BOT_TOKEN=your-token  # @BotFather on Telegram
-TELEGRAM_CHAT_ID=your-chat-id  # @userinfobot on Telegram
-```
-
 ### 4. Set up Telegram (optional)
 
-1. Open Telegram and search for `@BotFather`
-2. Send `/newbot` and follow the instructions
-3. Copy the token into `.env`
-4. Search `@userinfobot` to get your Chat ID
-5. Open a chat with your bot and send `/start`
+1. Search `@BotFather` on Telegram → `/newbot` → copy the token
+2. Search `@userinfobot` → copy your Chat ID
+3. Open a chat with your bot and send `/start`
+4. Add both values to `.env`
 
 ### 5. Run a scan
 
 ```bash
-# Full scan — subdomains + ports + AI analysis + Telegram
+# Interactive mode — asks for domain and all options
+python main.py
+
+# Pass domain directly
 python main.py target.com
 
-# Skip port scan (faster)
+# Skip specific steps without being asked
 python main.py target.com --no-scan
-
-# Skip Telegram notification
+python main.py target.com --no-virustotal
+python main.py target.com --no-wayback
 python main.py target.com --no-telegram
-
-# Interactive mode (no arguments)
-python main.py
 ```
 
-### 6. Run AI analysis manually
+### 6. Run AI analysis on an existing report
 
 ```bash
 # Auto-detects the latest report
 python analyze.py
 
-# Specify a report
+# Specify a report manually
 python analyze.py report/target.com_20240527/report_completo.json
 ```
 
@@ -122,13 +105,15 @@ python analyze.py report/target.com_20240527/report_completo.json
 
 ```
 reconai/
-├── main.py              # Orchestrator — runs the full pipeline
-├── analyze.py           # AI analysis — multi-provider support
-├── osint_step1.py       # Subdomain enumeration module
-├── shodan_module.py     # Shodan integration + IP resolution
-├── scanner_module.py    # Multi-threaded port scanner
-├── telegram_module.py   # Telegram notifications
-├── .env.example         # Configuration template
+├── main.py                # Orchestrator — runs the full pipeline
+├── analyze.py             # AI analysis — interactive provider selection + fallback
+├── osint_step1.py         # Subdomain enumeration with fallback
+├── shodan_module.py       # Shodan integration + IP resolution
+├── scanner_module.py      # Multi-threaded port scanner
+├── virustotal_module.py   # VirusTotal reputation analysis
+├── wayback_module.py      # Wayback Machine historical analysis
+├── telegram_module.py     # Telegram notifications with inline buttons
+├── .env.example           # Configuration template
 └── README.md
 ```
 
@@ -140,11 +125,20 @@ reconai/
 ==================================================
          ReconAI v0.1
 ==================================================
-  Target    : tesla.com
-  Avvio     : 2024-05-27 14:30:22
-  Port scan : SI
-  Telegram  : SI
-==================================================
+
+  Target: tesla.com
+
+[?] Vuoi eseguire il port scan? [y/n]: y
+[?] Vuoi eseguire l'analisi VirusTotal? [y/n]: y
+[?] Vuoi eseguire l'analisi Wayback Machine? [y/n]: y
+[?] Vuoi ricevere la notifica Telegram? [y/n]: y
+
+--------------------------------------------------
+  Port scan        : SI
+  VirusTotal       : SI
+  Wayback Machine  : SI
+  Telegram         : SI
+--------------------------------------------------
 
 STEP 1 — Subdomain enumeration
 [+] crt.sh OK — 51 results
@@ -154,15 +148,34 @@ STEP 2 — IP resolution
 
 STEP 3 — Port scan
     [→] 1.2.3.4 (www.tesla.com)
-        [+] 80/tcp   HTTP
+        [+] 80/tcp   HTTP    HTTP/1.0 400 Bad Request
         [+] 443/tcp  HTTPS
 
-STEP 4 — AI analysis
-[+] Analysis saved: report/tesla.com_xxx/analisi_gemini.txt
+STEP 4 — VirusTotal
+    [1/12] 1.2.3.4... rischio BASSO — 0 engine
 
-STEP 5 — Telegram notification
-[+] Summary sent — waiting for your choice...
-[+] Full analysis file sent
+STEP 5 — Wayback Machine
+    Prima archiviazione: 2008-06-14
+    URL interessanti trovati: 47
+
+STEP 6 — AI analysis
+[?] Scegli il provider AI:
+    1. Google Gemini 2.5 Flash (gratuito)
+    2. Groq LLaMA 3.3 (gratuito)
+    Inserisci il numero [1-2]: 2
+[+] Analisi completata con Groq LLaMA 3.3
+
+STEP 7 — Telegram
+[+] Riepilogo inviato — in attesa della tua scelta
+
+==================================================
+  SCAN COMPLETATO
+  Sottodomini trovati  : 51
+  IP unici             : 12
+  IP con porte aperte  : 8
+  Porte totali         : 17
+  IP a rischio VT      : 0
+  URL interessanti WB  : 47
 ==================================================
 ```
 
@@ -172,16 +185,18 @@ STEP 5 — Telegram notification
 
 | Provider | Model | Cost | Notes |
 |----------|-------|------|-------|
-| Google Gemini | gemini-2.5-flash | Free | Recommended to start |
+| Google Gemini | gemini-2.5-flash | Free | Good quality |
 | Groq | llama-3.3-70b | Free | Fastest |
 | Anthropic | claude-sonnet-4 | Paid | Best analysis quality |
 | OpenAI | gpt-4o-mini | Paid | Good balance |
+
+If a provider fails (e.g. 503 overload), ReconAI asks if you want to retry with another one automatically.
 
 ---
 
 ## Legal disclaimer
 
-ReconAI is designed for **passive OSINT only**. All data is collected from public sources (certificate transparency logs, public APIs). No direct interaction with target infrastructure beyond DNS resolution and basic port probing.
+ReconAI is designed for **passive OSINT only**. All data is collected from public sources — certificate transparency logs, public APIs, Wayback Machine archives. No direct exploitation or intrusive scanning.
 
 **Only use ReconAI against targets you own or have explicit written authorization to test. Unauthorized scanning may be illegal in your jurisdiction.**
 
@@ -196,9 +211,8 @@ This tool is intended for:
 
 - [ ] Web interface — submit a domain, receive a report
 - [ ] PDF export — professional report for client delivery
-- [ ] VirusTotal module — IP and domain reputation
 - [ ] Email harvesting module
-- [ ] Shodan paid plan integration
+- [ ] Shodan paid plan full integration
 - [ ] Scheduled scans — monitor a target over time
 - [ ] Diff reports — detect changes between scans
 
